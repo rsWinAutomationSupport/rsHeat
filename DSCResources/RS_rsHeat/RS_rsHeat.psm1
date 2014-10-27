@@ -34,9 +34,8 @@ function Set-TargetResource
     New-rsEventLogSource -logSource $logSource
     . (Get-rsSecrets)
     $catalog = Get-rsServiceCatalog
-    $authToken = Get-rsAuthToken
     $uri = (($catalog.access.serviceCatalog | ? type -eq 'orchestration').endpoints | ? region -eq $Region ).publicURL
-    $stacks = (Invoke-rsRestMethod -Uri ($uri,"stacks" -join '/') -Method GET -Headers $authToken -ContentType application/json).stacks
+    $stacks = (Invoke-rsRestMethod -Uri ($uri,"stacks" -join '/') -Method GET -Headers (Get-rsAuthToken) -ContentType application/json).stacks
 
     if( $Ensure -eq "Present" )
     {
@@ -56,13 +55,13 @@ function Set-TargetResource
         {
             Write-EventLog -LogName DevOps -Source $logSource -EntryType Information -EventId 1000 -Message "POST Request: $($uri,"stacks" -join '/')"
             Write-Verbose "POST"
-            $response = Invoke-rsRestMethod -Uri $($uri,"stacks" -join '/') -Method POST -Headers $authToken -Body $body -ContentType application/json -Verbose
+            $response = Invoke-rsRestMethod -Uri $($uri,"stacks" -join '/') -Method POST -Headers (Get-rsAuthToken) -Body $body -ContentType application/json -Verbose
         }
         else
         {
             Write-EventLog -LogName DevOps -Source $logSource -EntryType Information -EventId 1000 -Message "PUT Request: $($uri,"stacks",$Name -join '/')"
             Write-Verbose "PUT"
-            $response = Invoke-rsRestMethod -Uri $($uri,"stacks",$Name,$(($stacks | ? {$_.stack_name -eq $Name}).id) -join '/') -Method PUT -Headers $authToken -Body $body -ContentType application/json
+            $response = Invoke-rsRestMethod -Uri $($uri,"stacks",$Name,$(($stacks | ? {$_.stack_name -eq $Name}).id) -join '/') -Method PUT -Headers (Get-rsAuthToken) -Body $body -ContentType application/json
         }
         if( ($response -match "Accepted") -or ($response.stack.id.count -gt 0) )
         {
@@ -106,9 +105,8 @@ function Test-TargetResource
     New-rsEventLogSource -logSource $logSource
     . (Get-rsSecrets)
     $catalog = Get-rsServiceCatalog
-    $authToken = Get-rsAuthToken
     $uri = (($catalog.access.serviceCatalog | ? type -eq 'orchestration').endpoints | ? region -eq $Region ).publicURL
-    $stacks = (Invoke-rsRestMethod -Uri ($uri,"stacks" -join '/') -Method GET -Headers $authToken -ContentType application/json).stacks
+    $stacks = (Invoke-rsRestMethod -Uri ($uri,"stacks" -join '/') -Method GET -Headers (Get-rsAuthToken) -ContentType application/json).stacks
 
     if( !(Test-Path $TemplateFile))
     {
