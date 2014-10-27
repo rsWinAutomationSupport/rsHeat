@@ -35,7 +35,7 @@ function Set-TargetResource
     . (Get-rsSecrets)
     $catalog = Get-rsServiceCatalog
     $uri = (($catalog.access.serviceCatalog | ? type -eq 'orchestration').endpoints | ? region -eq $Region ).publicURL
-    $stacks = (Invoke-rsRestMethod -Uri ($uri,"stacks" -join '/') -Method GET -Headers (Get-rsAuthToken) -ContentType application/json).stacks
+    $stacks = (Invoke-rsRestMethod -Uri ($uri,"stacks" -join '/') -Method GET -Headers $(Get-rsAuthToken) -ContentType application/json).stacks
 
     if( $Ensure -eq "Present" )
     {
