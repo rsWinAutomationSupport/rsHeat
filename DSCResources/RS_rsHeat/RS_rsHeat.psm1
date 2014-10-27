@@ -72,7 +72,7 @@ function Set-TargetResource
     {
         Write-EventLog -LogName DevOps -Source $logSource -EntryType Information -EventId 1000 -Message "DELETE Request: $($uri,"stacks",$Name -join '/')"
         Write-Verbose "DELETE"
-        $response = Invoke-rsRestMethod -Uri $($uri,"stacks",$Name,$(($stacks | ? {$_.stack_name -eq $Name}).id) -join '/') -Method DELETE -Headers $authToken -Body $body -ContentType application/json
+        $response = Invoke-rsRestMethod -Uri $($uri,"stacks",$Name,$(($stacks | ? {$_.stack_name -eq $Name}).id) -join '/') -Method DELETE -Headers (Get-rsAuthToken) -Body $body -ContentType application/json
         if( Test-Path $TemplateHash )
         {
             Remove-Item $TemplateHash -Force
