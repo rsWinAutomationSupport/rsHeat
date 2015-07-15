@@ -1,4 +1,106 @@
-﻿function Get-TargetResource
+﻿
+#region Helper Functions
+Function Invoke-OpenStackRestMethod
+{
+    param (
+        [string][ValidateNotNull()]$Uri,
+        [string][ValidateSet('GET', 'PUT', 'POST', 'DELETE', ignorecase=$true)]$Method,
+        [string]$Body,
+        [hashtable]$Headers,
+        [string][ValidateSet('application/json', 'application/xml', ignorecase=$true)]$ContentType = "application/json",
+        [uint32]$Retries = 2,
+        [uint32]$TimeOut = 10
+    )
+
+    $i = 0
+    $ContentType = $ContentType.ToLower()
+    
+    do 
+    {
+        if($i -ge $Retries) 
+        {
+            Write-Verbose -Message "Failed to retrieve OpenStack Service Catalog, reached maximum retries"
+            return $null
+        }
+        
+        if($Method.ToLower() -eq "post" -or $Method.ToLower() -eq "put") 
+        {
+            try 
+            {
+                $Data =  (Invoke-RestMethod -Uri $Uri -Method $Method.ToUpper() -Body $Body -Headers $Headers -ContentType $ContentType -ErrorAction SilentlyContinue)
+            }
+            catch 
+            {
+                if( (($error[0].Exception.Response.StatusCode.value__) -ge 500) -or ($Error[0].Exception.Message -like "The remote name could not be resolved:*") ) 
+                {
+                    Write-Verbose -Message "An OpenStack API call Failed `n $Method`: $Uri `n $Body `n $($_.Exception.Message) `n $($_.ErrorDetails.Message)"
+                }
+                else 
+                {
+                    Write-Verbose -Message "An OpenStack API call Failed `n $Method`: $Uri `n $Body `n $($_.Exception.Message) `n $($_.ErrorDetails.Message)"
+                    break
+                }
+            }
+        }
+        else 
+        {
+           try 
+           {
+               $Data =  (Invoke-RestMethod -Uri $Uri -Method $Method.ToUpper() -Headers $Headers -ContentType $ContentType -ErrorAction SilentlyContinue)
+           }
+           catch 
+           {
+               if( (($error[0].Exception.Response.StatusCode.value__) -ge 500) -or ($Error[0].Exception.Message -like "The remote name could not be resolved:*") ) 
+               {
+                   Write-Verbose -Message "An OpenStack API call Failed `n $Method`: $Uri `n $Body `n $($_.Exception.Message) `n $($_.ErrorDetails.Message)"
+               }
+               else 
+               {
+                   Write-Verbose -Message "An OpenStack API call Failed `n $Method`: $Uri `n $Body `n $($_.Exception.Message) `n $($_.ErrorDetails.Message)"
+                   break
+               }
+           }
+        }
+        
+        $i++
+        if($Data -eq $null) 
+        {
+            Write-Verbose -Message "Failed OpenStack API call. Trying again in $TimeOut seconds`n $($_.Exception.Message)"
+
+            if($i -ge $Retries) 
+            {
+                return $null
+            }
+            else 
+            {
+                Start-Sleep -Seconds $TimeOut
+            }
+        }
+    }
+    while($Data -eq $null)
+
+    return $Data
+}
+
+Function Get-OpenStackServiceCatalog
+{
+    param (
+        $Uri = "https://identity.api.rackspacecloud.com/v2.0/tokens",
+        $Username,
+        $ApiKey
+    )
+
+    $Body = $(@{"auth" = @{"RAX-KSKEY:apiKeyCredentials" = @{"username" = $Username; "apiKey" = $ApiKey}}} | convertTo-Json)
+
+    $Result = (Invoke-OpenStackRestMethod -Retries 20 -TimeOut 15 -Uri $Uri -Method POST -Body $body -ContentType application/json)
+
+    return $Result
+}
+#endregion
+
+#region DSC Functions
+
+function Get-TargetResource
 {
     param (
         [Parameter(Mandatory)]
@@ -28,40 +130,43 @@ function Set-TargetResource
         [String]$Region,
         [Microsoft.Management.Infrastructure.CimInstance[]]$Parameters,
         [uint32]$TimeoutMins,
-        [ValidateSet("Present", "Absent")][string]$Ensure = "Present"
+        [ValidateSet("Present", "Absent")]
+        [string]$Ensure = "Present",
+        [string]$Username,
+        [string]$ApiKey
     )
-    $logSource = $($PSCmdlet.MyInvocation.MyCommand.ModuleName)
-    New-rsEventLogSource -logSource $logSource
-    . (Get-rsSecrets)
-    $catalog = Get-rsServiceCatalog
-    $uri = (($catalog.access.serviceCatalog | ? type -eq 'orchestration').endpoints | ? region -eq $Region ).publicURL
-    $stacks = (Invoke-rsRestMethod -Uri ($uri,"stacks" -join '/') -Method GET -Headers $(Get-rsAuthToken) -ContentType application/json).stacks
+       
+    $Catalog = Get-OpenStackServiceCatalog -Username $Username -ApiKey $ApiKey
+    $XAuthToken = @{"X-Auth-Token"=($Catalog.access.token.id)}
+
+    $uri = (($catalog.access.serviceCatalog | Where-Object type -eq 'orchestration').endpoints | Where-Object region -eq $Region ).publicURL
+    $stacks = (Invoke-OpenStackRestMethod -Uri "$uri/stacks" -Method GET -Headers $XAuthToken -ContentType application/json).stacks
 
     if( $Ensure -eq "Present" )
     {
         $params = @{}
-        foreach($instance in $Parameters) {
+        foreach($instance in $Parameters) 
+        {
             $params += @{$instance.Key=$instance.Value}
         }
+        
         $file = (Get-Content $TemplateFile | Out-String) 
         $body = @{
-            "stack_name"= $Name;
-            "template"= $file;
-            "parameters"= $params;
-            "timeout_mins"= $TimeoutMins
-        } | ConvertTo-Json -Depth 8
+                    "stack_name"= $Name;
+                    "template"= $file;
+                    "parameters"= $params;
+                    "timeout_mins"= $TimeoutMins
+                } | ConvertTo-Json -Depth 8
     
-        if( ($stacks | ? {$_.stack_name -eq $Name}).id.count -eq 0 )
+        if( ($stacks | Where-Object {$_.stack_name -eq $Name}).id.count -eq 0 )
         {
-            Write-EventLog -LogName DevOps -Source $logSource -EntryType Information -EventId 1000 -Message "POST Request: $($uri,"stacks" -join '/')"
-            Write-Verbose "POST"
-            $response = Invoke-rsRestMethod -Uri $($uri,"stacks" -join '/') -Method POST -Headers $(Get-rsAuthToken) -Body $body -ContentType application/json -Verbose
+            Write-Verbose "OpenStack API POST Request: $uri/stacks"
+            $response = Invoke-OpenStackRestMethod -Uri "$uri/stacks" -Method POST -Headers $XAuthToken -Body $body -ContentType application/json -Verbose
         }
         else
         {
-            Write-EventLog -LogName DevOps -Source $logSource -EntryType Information -EventId 1000 -Message "PUT Request: $($uri,"stacks",$Name -join '/')"
-            Write-Verbose "PUT"
-            $response = Invoke-rsRestMethod -Uri $($uri,"stacks",$Name,$(($stacks | ? {$_.stack_name -eq $Name}).id) -join '/') -Method PUT -Headers $(Get-rsAuthToken) -Body $body -ContentType application/json
+            Write-Verbose "Openstack PUT Request: $uri/stacks/$Name"
+            $response = Invoke-OpenStackRestMethod -Uri $($uri,"stacks",$Name,$(($stacks | Where-Object {$_.stack_name -eq $Name}).id) -join '/') -Method PUT -Headers $XAuthToken -Body $body -ContentType application/json
         }
         if( ($response -match "Accepted") -or ($response.stack.id.count -gt 0) )
         {
@@ -70,9 +175,8 @@ function Set-TargetResource
     }
     else
     {
-        Write-EventLog -LogName DevOps -Source $logSource -EntryType Information -EventId 1000 -Message "DELETE Request: $($uri,"stacks",$Name -join '/')"
-        Write-Verbose "DELETE"
-        $response = Invoke-rsRestMethod -Uri $($uri,"stacks",$Name,$(($stacks | ? {$_.stack_name -eq $Name}).id) -join '/') -Method DELETE -Headers $(Get-rsAuthToken) -Body $body -ContentType application/json
+        Write-Verbose "DELETE Request: $($uri,"stacks",$Name -join '/')"
+        $response = Invoke-OpenStackRestMethod -Uri $($uri,"stacks",$Name,$(($stacks | Where-Object {$_.stack_name -eq $Name}).id) -join '/') -Method DELETE -Headers $XAuthToken -Body $body -ContentType application/json
         if( Test-Path $TemplateHash )
         {
             Remove-Item $TemplateHash -Force
@@ -92,36 +196,34 @@ function Test-TargetResource
         [String]$Region,
         [Microsoft.Management.Infrastructure.CimInstance[]]$Parameters,
         [uint32]$TimeoutMins,
-        [ValidateSet("Present", "Absent")][string]$Ensure = "Present"
+        [ValidateSet("Present", "Absent")]
+        [string]$Ensure = "Present",
+        [string]$Username,
+        [string]$ApiKey
     )
+
     $testresult = $true
-    $logSource = $($PSCmdlet.MyInvocation.MyCommand.ModuleName)
-    $exists = Import-Module rsCommon -ErrorAction SilentlyContinue -PassThru
-    if( [string]::IsNullOrEmpty($exists) )
-    {
-        Write-EventLog -LogName DevOps -Source $logSource -EntryType Error -EventId 1003 -Message "rsCommon is not located on this machine"
-        Throw "rsCommon is not located on this machine"
-    }
-    New-rsEventLogSource -logSource $logSource
-    . (Get-rsSecrets)
-    $catalog = Get-rsServiceCatalog
-    $uri = (($catalog.access.serviceCatalog | ? type -eq 'orchestration').endpoints | ? region -eq $Region ).publicURL
-    $stacks = (Invoke-rsRestMethod -Uri ($uri,"stacks" -join '/') -Method GET -Headers $(Get-rsAuthToken) -ContentType application/json).stacks
+    
+    $Catalog = Get-OpenStackServiceCatalog -Username $Username -ApiKey $ApiKey
+    $XAuthToken = @{"X-Auth-Token"=($Catalog.access.token.id)}
+
+    $uri = (($catalog.access.serviceCatalog | Where-Object type -eq 'orchestration').endpoints | Where-Object region -eq $Region ).publicURL
+    $stacks = (Invoke-OpenStackRestMethod -Uri "$uri/stacks" -Method GET -Headers $XAuthToken -ContentType application/json).stacks
 
     if( !(Test-Path $TemplateFile))
     {
-        Write-EventLog -LogName DevOps -Source $logSource -EntryType Error -EventId 1003 -Message "File not found: $TemplateFile"
-        Throw "Template File Not Found"
+        Write-Verbose -Message "File not found: $TemplateFile"
+        Throw "Template File Not Found - $($TemplateFile)"
     }
-    if( $Ensure -eq "Absent" -and ( ($stacks | ? {$_.stack_name -eq $Name}).id.count -eq 0) )
+    if( $Ensure -eq "Absent" -and ( ($stacks | Where-Object {$_.stack_name -eq $Name}).id.count -eq 0) )
     {
         return $true
     }    
-    if( $Ensure -eq "Present" -and ( ($stacks | ? {$_.stack_name -eq $Name}).id.count -eq 0) )
+    if( $Ensure -eq "Present" -and ( ($stacks | Where-Object {$_.stack_name -eq $Name}).id.count -eq 0) )
     {
         return $false
     }
-    if( $Ensure -eq "Absent" -and ( ($stacks | ? {$_.stack_name -eq $Name}).id.count -gt 0) )
+    if( $Ensure -eq "Absent" -and ( ($stacks | Where-Object {$_.stack_name -eq $Name}).id.count -gt 0) )
     {
         return $false
     }
@@ -129,6 +231,7 @@ function Test-TargetResource
     {
         return $false
     }
+
     $checkHash = Get-FileHash $TemplateFile
     $currentHash = Import-Csv $TemplateHash
     if($checkHash.Hash -ne $currentHash.hash)
@@ -136,5 +239,6 @@ function Test-TargetResource
         $testresult = $false
     }
     return $testresult
-}
+}#endregion
+
 Export-ModuleMember -Function *-TargetResource
