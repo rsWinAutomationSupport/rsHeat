@@ -111,7 +111,7 @@ resources:
                 "%%rsBootURL" : {get_param: rsBootURL}
 ```
 
-### Cloud servers, added to an existing F5 LB pool
+### Cloud servers, added to Cloud LB pool
 ```
 description: 'HEAT template for configuring clients in a single role'
 heat_template_version: '2014-10-16'
