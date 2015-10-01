@@ -141,6 +141,7 @@ function Set-TargetResource
 
     $uri = (($catalog.access.serviceCatalog | Where-Object type -eq 'orchestration').endpoints | Where-Object region -eq $Region ).publicURL
     $stacks = (Invoke-OpenStackRestMethod -Uri "$uri/stacks" -Method GET -Headers $XAuthToken -ContentType application/json).stacks
+    $stackID = ($stacks | Where-Object {$_.stack_name -eq $Name}).id
 
     if( $Ensure -eq "Present" )
     {
@@ -166,7 +167,7 @@ function Set-TargetResource
         else
         {
             Write-Verbose "Openstack PUT Request: $uri/stacks/$Name"
-            $response = Invoke-OpenStackRestMethod -Uri $($uri,"stacks",$Name,$(($stacks | Where-Object {$_.stack_name -eq $Name}).id) -join '/') -Method PUT -Headers $XAuthToken -Body $body -ContentType application/json
+            $response = Invoke-OpenStackRestMethod -Uri "$uri/stacks/$Name/$stackID" -Method PUT -Headers $XAuthToken -Body $body -ContentType application/json
         }
         if( ($response -match "Accepted") -or ($response.stack.id.count -gt 0) )
         {
@@ -176,7 +177,7 @@ function Set-TargetResource
     else
     {
         Write-Verbose "DELETE Request: $($uri,"stacks",$Name -join '/')"
-        $response = Invoke-OpenStackRestMethod -Uri $($uri,"stacks",$Name,$(($stacks | Where-Object {$_.stack_name -eq $Name}).id) -join '/') -Method DELETE -Headers $XAuthToken -Body $body -ContentType application/json
+        $response = Invoke-OpenStackRestMethod -Uri "$uri/stacks/$Name/$stackID" -Method DELETE -Headers $XAuthToken -Body $body -ContentType application/json
         if( Test-Path $TemplateHash )
         {
             Remove-Item $TemplateHash -Force
